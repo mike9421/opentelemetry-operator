@@ -31,6 +31,9 @@ type Item struct {
 	Labels        labels.Labels
 	CollectorName string
 	hash          string
+	// RelabeledKeep can be used by `relabelConfigTargetFilter`, as the relabel has been performed in the NewItem.
+	RelabeledKeep      bool
+	TargetURLRelabeled string
 }
 
 func (t *Item) Hash() string {
@@ -57,7 +60,7 @@ func (t *Item) GetNodeName() string {
 // * Item fields must not be modified after creation.
 // * Item should only be made via its constructor, never directly.
 func NewItem(jobName string, targetURL string, labels labels.Labels, collectorName string, relabelCfgs ...*relabel.Config) *Item {
-	labelsRelabeled, _ := relabel.Process(labels.Copy(), relabelCfgs...)
+	labelsRelabeled, relabeledKeep := relabel.Process(labels.Copy(), relabelCfgs...)
 	targetURLRelabeled := labelsRelabeled.Get(model.AddressLabel)
 	// Under normal circumstances, this should not happen.
 	if len(targetURLRelabeled) == 0 {
@@ -67,10 +70,12 @@ func NewItem(jobName string, targetURL string, labels labels.Labels, collectorNa
 	}
 
 	return &Item{
-		JobName:       jobName,
-		hash:          jobName + targetURLRelabeled + strconv.FormatUint(labelsRelabeled.Hash(), 10),
-		TargetURL:     targetURL,
-		Labels:        labels,
-		CollectorName: collectorName,
+		JobName:            jobName,
+		hash:               jobName + targetURLRelabeled + strconv.FormatUint(labelsRelabeled.Hash(), 10),
+		TargetURL:          targetURL,
+		Labels:             labels,
+		CollectorName:      collectorName,
+		RelabeledKeep:      relabeledKeep,
+		TargetURLRelabeled: targetURLRelabeled,
 	}
 }
