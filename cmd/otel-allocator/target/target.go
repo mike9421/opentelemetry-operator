@@ -6,7 +6,9 @@ package target
 import (
 	"strconv"
 
+	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/prometheus/model/relabel"
 )
 
 // nodeLabels are labels that are used to identify the node on which the given
@@ -54,10 +56,19 @@ func (t *Item) GetNodeName() string {
 // INVARIANTS:
 // * Item fields must not be modified after creation.
 // * Item should only be made via its constructor, never directly.
-func NewItem(jobName string, targetURL string, labels labels.Labels, collectorName string) *Item {
+func NewItem(jobName string, targetURL string, labels labels.Labels, collectorName string, relabelCfgs ...*relabel.Config) *Item {
+	labelsRelabeled, _ := relabel.Process(labels.Copy(), relabelCfgs...)
+	targetURLRelabeled := labelsRelabeled.Get(model.AddressLabel)
+	// Under normal circumstances, this should not happen.
+	if len(targetURLRelabeled) == 0 {
+		// Use the original labels for hash calculation to avoid overwriting other Items.
+		targetURLRelabeled = targetURL
+		labelsRelabeled = labels
+	}
+
 	return &Item{
 		JobName:       jobName,
-		hash:          jobName + targetURL + strconv.FormatUint(labels.Hash(), 10),
+		hash:          jobName + targetURLRelabeled + strconv.FormatUint(labelsRelabeled.Hash(), 10),
 		TargetURL:     targetURL,
 		Labels:        labels,
 		CollectorName: collectorName,
