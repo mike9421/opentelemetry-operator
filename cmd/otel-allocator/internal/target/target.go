@@ -28,18 +28,6 @@ var (
 	relevantLabelNames           = append(nodeLabels, endpointSliceTargetKindLabel, endpointSliceTargetNameLabel)
 )
 
-// metricResourceLabels are added to the resource by default in OTel.
-// The original values should be retrieved for further processing.
-// For details, see https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/receiver/prometheusreceiver/internal/prom_to_otlp.go#L89.
-var (
-	metricResourceLabels = append(nodeLabels, []string{
-		"__meta_kubernetes_pod_name",
-		"__meta_kubernetes_pod_uid",
-		"__meta_kubernetes_pod_container_name",
-		"__meta_kubernetes_namespace",
-	}...)
-)
-
 type ItemHash uint64
 
 func (h ItemHash) String() string {
@@ -58,38 +46,45 @@ type Item struct {
 
 type ItemOption func(*Item)
 
-func WithReservedLabelMatching(labels labels.Labels) ItemOption {
+func WithReservedLabelMatching(lbs labels.Labels) ItemOption {
 	return func(i *Item) {
-		i.ReservedLabels = labels.MatchLabels(true, metricResourceLabels...)
-	}
-}
+		// There are some "__meta_" labels added to the resource by default in OTel.
+		// The original values should be retrieved for further processing.
+		// Preserves all __meta_* labels to insulate the operator from OTel changes and guarantee availability.
+		// For details, see https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/receiver/prometheusreceiver/internal/prom_to_otlp.go#L89.
+		i.ReservedLabels = make(labels.Labels, 0, len(lbs))
 
-// WithFilterMetaLabels is used to remove labels with the MetaLabelPrefix to prevent them from being used in hash calculation.
-// In Prometheus, labels with the MetaLabelPrefix are discarded after relabeling and are not used in hash calculation.
-// For details, see https://github.com/prometheus/prometheus/blob/e6cfa720fbe6280153fab13090a483dbd40bece3/scrape/target.go#L534.
-func WithFilterMetaLabels() ItemOption {
-	return func(i *Item) {
 		writeIndex := 0
-		for _, l := range i.Labels {
-			if !strings.HasPrefix(l.Name, model.MetaLabelPrefix) {
-				i.Labels[writeIndex] = l
+		for _, l := range lbs {
+			if strings.HasPrefix(l.Name, model.MetaLabelPrefix) {
+				i.ReservedLabels[writeIndex] = l
 				writeIndex++
 			}
 		}
-		i.Labels = i.Labels[:writeIndex]
-		i.Labels = slices.Clip(i.Labels)
+		i.ReservedLabels = i.ReservedLabels[:writeIndex]
+		i.ReservedLabels = slices.Clip(i.ReservedLabels)
 	}
 }
 
 func (t *Item) Hash() ItemHash {
 	if t.hash == 0 {
-		t.hash = ItemHash(LabelsHashWithJobName(t.Labels, t.JobName))
+		// filterMetaLabels is the labels after removing labels with the MetaLabelPrefix to prevent them from being used in hash calculation.
+		// In Prometheus, labels with the MetaLabelPrefix are discarded after relabeling and are not used in hash calculation.
+		// For details, see https://github.com/prometheus/prometheus/blob/e6cfa720fbe6280153fab13090a483dbd40bece3/scrape/target.go#L534.
+		filterMetaLabels := labels.Labels{}
+		for _, l := range t.Labels {
+			if !strings.HasPrefix(l.Name, model.MetaLabelPrefix) {
+				filterMetaLabels = append(filterMetaLabels, l)
+			}
+		}
+
+		t.hash = ItemHash(LabelsHashWithJobName(filterMetaLabels, t.JobName))
 	}
 	return t.hash
 }
 
 func (t *Item) GetNodeName() string {
-	relevantLabels := t.Labels.MatchLabels(true, relevantLabelNames...)
+	relevantLabels := t.AllLabels().MatchLabels(true, relevantLabelNames...)
 	for _, label := range nodeLabels {
 		if val := relevantLabels.Get(label); val != "" {
 			return val
@@ -104,15 +99,26 @@ func (t *Item) GetNodeName() string {
 }
 
 func (t *Item) AllLabels() labels.Labels {
-	allLabels := make(labels.Labels, 0, len(t.Labels)+len(t.ReservedLabels))
-	allLabels = append(allLabels, t.ReservedLabels...)
-	return append(allLabels, t.Labels.MatchLabels(false, relevantLabelNames...)...)
+	allLabels := t.Labels.Copy()
+
+	// 1. Restores potentially dropped "__meta_" labels to ensure OTel access.
+	// 2. If relabel_configs modifies "__meta_" labels, provides the modified values to OTel (as relabel_configs is removed).
+	for _, l := range t.ReservedLabels {
+		if allLabels.Get(l.Name) == "" {
+			allLabels = append(allLabels, l)
+		}
+	}
+
+	return allLabels
 }
 
 // GetEndpointSliceName returns the name of the EndpointSlice that the target is part of.
 // If the target is not part of an EndpointSlice, it returns an empty string.
 func (t *Item) GetEndpointSliceName() string {
-	return t.Labels.Get(endpointSliceName)
+	if name := t.Labels.Get(endpointSliceName); len(name) > 0 {
+		return name
+	}
+	return t.ReservedLabels.Get(endpointSliceName)
 }
 
 // NewItem Creates a new target item.
