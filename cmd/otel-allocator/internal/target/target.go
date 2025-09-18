@@ -4,7 +4,6 @@
 package target
 
 import (
-	"slices"
 	"strconv"
 	"strings"
 
@@ -36,33 +35,28 @@ func (h ItemHash) String() string {
 
 // Item represents a target to be scraped.
 type Item struct {
-	JobName        string
-	TargetURL      string
-	Labels         labels.Labels
-	ReservedLabels labels.Labels
-	CollectorName  string
-	hash           ItemHash
+	JobName       string
+	TargetURL     string
+	Labels        labels.Labels
+	CollectorName string
+	hash          ItemHash
 }
 
 type ItemOption func(*Item)
 
-func WithReservedLabelMatching(lbs labels.Labels) ItemOption {
+func WithReservedLabelAppending(lbs labels.Labels) ItemOption {
 	return func(i *Item) {
 		// There are some "__meta_" labels added to the resource by default in OTel.
 		// The original values should be retrieved for further processing.
 		// Preserves all __meta_* labels to insulate the operator from OTel changes and guarantee availability.
 		// For details, see https://github.com/open-telemetry/opentelemetry-collector-contrib/blob/main/receiver/prometheusreceiver/internal/prom_to_otlp.go#L89.
-		i.ReservedLabels = make(labels.Labels, 0, len(lbs))
-
-		writeIndex := 0
 		for _, l := range lbs {
-			if strings.HasPrefix(l.Name, model.MetaLabelPrefix) {
-				i.ReservedLabels[writeIndex] = l
-				writeIndex++
+			if strings.HasPrefix(l.Name, model.MetaLabelPrefix) && i.Labels.Get(l.Name) == "" {
+				// 1. Restores potentially dropped "__meta_" labels to ensure OTel access.
+				// 2. If relabel_configs modifies "__meta_" labels(which is not a recommended practice), provides the modified values to OTel (as relabel_configs is removed).
+				i.Labels = append(i.Labels, l)
 			}
 		}
-		i.ReservedLabels = i.ReservedLabels[:writeIndex]
-		i.ReservedLabels = slices.Clip(i.ReservedLabels)
 	}
 }
 
@@ -84,7 +78,7 @@ func (t *Item) Hash() ItemHash {
 }
 
 func (t *Item) GetNodeName() string {
-	relevantLabels := t.AllLabels().MatchLabels(true, relevantLabelNames...)
+	relevantLabels := t.Labels.MatchLabels(true, relevantLabelNames...)
 	for _, label := range nodeLabels {
 		if val := relevantLabels.Get(label); val != "" {
 			return val
@@ -98,27 +92,10 @@ func (t *Item) GetNodeName() string {
 	return relevantLabels.Get(endpointSliceTargetNameLabel)
 }
 
-func (t *Item) AllLabels() labels.Labels {
-	allLabels := t.Labels.Copy()
-
-	// 1. Restores potentially dropped "__meta_" labels to ensure OTel access.
-	// 2. If relabel_configs modifies "__meta_" labels, provides the modified values to OTel (as relabel_configs is removed).
-	for _, l := range t.ReservedLabels {
-		if allLabels.Get(l.Name) == "" {
-			allLabels = append(allLabels, l)
-		}
-	}
-
-	return allLabels
-}
-
 // GetEndpointSliceName returns the name of the EndpointSlice that the target is part of.
 // If the target is not part of an EndpointSlice, it returns an empty string.
 func (t *Item) GetEndpointSliceName() string {
-	if name := t.Labels.Get(endpointSliceName); len(name) > 0 {
-		return name
-	}
-	return t.ReservedLabels.Get(endpointSliceName)
+	return t.Labels.Get(endpointSliceName)
 }
 
 // NewItem Creates a new target item.
