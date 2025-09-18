@@ -46,7 +46,7 @@ func MakeTargetFromProm(rCfgs []*relabel.Config, rawTarget *target.Item) (*targe
 		return nil, nil
 	}
 
-	newTarget := target.NewItem(rawTarget.JobName, lset.Get(model.AddressLabel), lset, rawTarget.CollectorName, target.WithReservedLabelMatching(origLabels))
+	newTarget := target.NewItem(rawTarget.JobName, lset.Get(model.AddressLabel), lset, rawTarget.CollectorName, target.WithReservedLabelAppending(origLabels))
 	return newTarget, nil
 }
 
