@@ -953,6 +953,7 @@ func TestLoadConfig(t *testing.T) {
 
 func TestNamespaceLabelUpdate(t *testing.T) {
 	var err error
+
 	namespace := "test"
 	portName := "web"
 	podMonitors := []*monitoringv1.PodMonitor{
